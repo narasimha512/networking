@@ -60,47 +60,11 @@
 		},							    \
 	}
 
-#if HAVE_SELINUX
-#include <selinux/selinux.h>
-#else
-/* Stubs for SELinux functions */
-static int is_selinux_enabled(void)
-{
-	return -1;
-}
-
-static int getpidcon(pid_t pid, char **context)
-{
-	*context = NULL;
-	return -1;
-}
-
-static int getfilecon(char *path, char **context)
-{
-	*context = NULL;
-	return -1;
-}
-
-static int security_get_initial_context(char *name,  char **context)
-{
-	*context = NULL;
-	return -1;
-}
-#endif
-
 int resolve_hosts;
 int preferred_family = AF_UNSPEC;
 int sctp_ino;
 
 int addr_width;
-int serv_width;
-
-static const char *TCP_PROTO = "tcp";
-static const char *SCTP_PROTO = "sctp";
-static const char *UDP_PROTO = "udp";
-static const char *RAW_PROTO = "raw";
-static const char *dg_proto;
-
 
 enum {
         TCP_DB,
@@ -123,31 +87,21 @@ enum {
 #define INET_L4_DBM ((1<<TCP_DB)|(1<<UDP_DB)|(1<<DCCP_DB)|(1<<SCTP_DB))
 #define INET_DBM (INET_L4_DBM | (1<<RAW_DB))
 
-enum {
-	SS_UNKNOWN,
-	SS_ESTABLISHED,
-	SS_SYN_SENT,
-	SS_SYN_RECV,
-	SS_FIN_WAIT1,
-	SS_FIN_WAIT2,
-	SS_TIME_WAIT,
-	SS_CLOSE,
-	SS_CLOSE_WAIT,
-	SS_LAST_ACK,
-	SS_LISTEN,
-	SS_CLOSING,
-	SS_MAX
-};
 
 enum {
-	SCTP_STATE_CLOSED		= 0,
-	SCTP_STATE_COOKIE_WAIT		= 1,
-	SCTP_STATE_COOKIE_ECHOED	= 2,
-	SCTP_STATE_ESTABLISHED		= 3,
-	SCTP_STATE_SHUTDOWN_PENDING	= 4,
-	SCTP_STATE_SHUTDOWN_SENT	= 5,
-	SCTP_STATE_SHUTDOWN_RECEIVED	= 6,
-	SCTP_STATE_SHUTDOWN_ACK_SENT	= 7,
+        SS_UNKNOWN,
+        SS_ESTABLISHED,
+        SS_SYN_SENT,
+        SS_SYN_RECV,
+        SS_FIN_WAIT1,
+        SS_FIN_WAIT2,
+        SS_TIME_WAIT,
+        SS_CLOSE,
+        SS_CLOSE_WAIT,
+        SS_LAST_ACK,
+        SS_LISTEN,
+        SS_CLOSING,
+        SS_MAX
 };
 
 #define SS_ALL ((1 << SS_MAX) - 1)
@@ -184,21 +138,18 @@ static const struct filter default_afs[AF_MAX] = {
 	},
 };
 
-static int do_default = 1;
 static struct filter current_filter;
 
 static void filter_db_set(struct filter *f, int db)
 {
 	f->states   |= default_dbs[db].states;
 	f->dbs	    |= 1 << db;
-	do_default   = 0;
 }
 
 static void filter_af_set(struct filter *f, int af)
 {
 	f->states	   |= default_afs[af].states;
 	f->families	   |= 1 << af;
-	do_default	    = 0;
 	preferred_family    = af;
 }
 
@@ -218,17 +169,6 @@ static unsigned long long cookie_sk_get(const uint32_t *cookie)
 {
 	return (((unsigned long long)cookie[1] << 31) << 1) | cookie[0];
 }
-
-static const char *sctp_sstate_name[] = {
-	[SCTP_STATE_CLOSED] = "CLOSED",
-	[SCTP_STATE_COOKIE_WAIT] = "COOKIE_WAIT",
-	[SCTP_STATE_COOKIE_ECHOED] = "COOKIE_ECHOED",
-	[SCTP_STATE_ESTABLISHED] = "ESTAB",
-	[SCTP_STATE_SHUTDOWN_PENDING] = "SHUTDOWN_PENDING",
-	[SCTP_STATE_SHUTDOWN_SENT] = "SHUTDOWN_SENT",
-	[SCTP_STATE_SHUTDOWN_RECEIVED] = "SHUTDOWN_RECEIVED",
-	[SCTP_STATE_SHUTDOWN_ACK_SENT] = "ACK_SENT",
-};
 
 struct sockstat {
 	struct sockstat	   *next;
@@ -260,13 +200,13 @@ struct dctcpstat {
 };
 
 static void sock_addr_print_width(int addr_len, const char *addr, char *delim,
-		int port_len, int port, const char *ifname)
+	 int port, const char *ifname)
 {
 	if (ifname) {
-		printf("%*s%%%s%s%-d ", addr_len, addr, ifname, delim,
-				port_len, port);
+		printf("%*s%%%s%s%d ", addr_len, addr, ifname, delim,
+				 port);
 	} else {
-		printf("%*s%s%-d ", addr_len, addr, delim, port_len, port);
+		printf("%*s%s%d ", addr_len, addr, delim, port);
 	}
 }
 
@@ -300,7 +240,7 @@ static void inet_addr_print(const inet_prefix *a, int port, unsigned int ifindex
 			est_len = 0;
 	}
 
-	sock_addr_print_width(est_len, ap, ":", serv_width, port,
+	sock_addr_print_width(est_len, ap, ":",  port,
 			ifname);
 }
 
@@ -669,7 +609,6 @@ Exit:
 
 static int tcp_show(struct filter *f, int socktype)
 {
-	dg_proto = TCP_PROTO;
 
 	 return inet_show_netlink(f, NULL, socktype);
 }
