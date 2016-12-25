@@ -66,6 +66,8 @@ int sctp_ino;
 
 int addr_width;
 
+static const char *TCP_PROTO = "tcp";
+
 enum {
         TCP_DB,
         DCCP_DB,
@@ -153,11 +155,6 @@ static void filter_af_set(struct filter *f, int af)
 	preferred_family    = af;
 }
 
-static int filter_af_get(struct filter *f, int af)
-{
-	return f->families & (1 << af);
-}
-
 static void filter_states_set(struct filter *f, int states)
 {
 	if (states)
@@ -209,6 +206,15 @@ static void sock_addr_print_width(int addr_len, const char *addr, char *delim,
 		printf("%*s%s%d ", addr_len, addr, delim, port);
 	}
 }
+
+struct scache {
+	struct scache *next;
+	int port;
+	char *name;
+	const char *proto;
+};
+
+struct scache *rlist;
 
 static void inet_addr_print(const inet_prefix *a, int port, unsigned int ifindex)
 {
@@ -580,32 +586,33 @@ static int show_one_inet_sock(const struct sockaddr_nl *addr,
 
 static int inet_show_netlink(struct filter *f, FILE *dump_fp, int protocol)
 {
-	int err = 0;
-	struct rtnl_handle rth, rth2;
-	int family = PF_INET;
-	struct inet_diag_arg arg = { .f = f, .protocol = protocol };
+        int err = 0;
+        struct rtnl_handle rth;
+        int family = PF_INET;
+        struct inet_diag_arg arg = { .f = f, .protocol = protocol };
 
-	if (rtnl_open_byproto(&rth, 0, NETLINK_SOCK_DIAG))
-		return -1;
+        if (rtnl_open_byproto(&rth, 0, NETLINK_SOCK_DIAG))
+                return -1;
 
-	rth.dump = MAGIC_SEQ;
-	rth.dump_fp = dump_fp;
-	if (preferred_family == PF_INET6)
-		family = PF_INET6;
+        rth.dump = MAGIC_SEQ;
+        rth.dump_fp = dump_fp;
+        if (preferred_family == PF_INET6)
+                family = PF_INET6;
 
-	if ((err = sockdiag_send(family, rth.fd, protocol, f)))
-		goto Exit;
+        if ((err = sockdiag_send(family, rth.fd, protocol, f)))
+                goto Exit;
 
-	if ((err = rtnl_dump_filter(&rth, show_one_inet_sock, &arg))) {
-		goto Exit;
-	}
+        if ((err = rtnl_dump_filter(&rth, show_one_inet_sock, &arg))) {
+                goto Exit;
+        }
 
 Exit:
-	rtnl_close(&rth);
-	if (arg.rth)
-		rtnl_close(arg.rth);
-	return err;
+        rtnl_close(&rth);
+        if (arg.rth)
+                rtnl_close(arg.rth);
+        return err;
 }
+
 
 static int tcp_show(struct filter *f, int socktype)
 {
@@ -613,24 +620,277 @@ static int tcp_show(struct filter *f, int socktype)
 	 return inet_show_netlink(f, NULL, socktype);
 }
 
-static int sctp_show(struct filter *f)
+static struct ssfilter * alloc_node(int type, void *pred)
 {
+        struct ssfilter *n = malloc(sizeof(*n));
+        if (n == NULL)
+                abort();
+        n->type = type;
+        n->pred = pred;
+        n->post = NULL;
+        return n;
+}
 
-    return inet_show_netlink(f, NULL, IPPROTO_SCTP);
+static int remember_he(struct aafilter *a, struct hostent *he)
+{
+	char **ptr = he->h_addr_list;
+	int cnt = 0;
+	int len;
 
+	if (he->h_addrtype == AF_INET)
+		len = 4;
+	else if (he->h_addrtype == AF_INET6)
+		len = 16;
+	else
+		return 0;
+
+	while (*ptr) {
+		struct aafilter *b = a;
+
+		if (a->addr.bitlen) {
+			if ((b = malloc(sizeof(*b))) == NULL)
+				return cnt;
+			*b = *a;
+			b->next = a->next;
+			a->next = b;
+		}
+		memcpy(b->addr.data, *ptr, len);
+		b->addr.bytelen = len;
+		b->addr.bitlen = len*8;
+		b->addr.family = he->h_addrtype;
+		ptr++;
+		cnt++;
+	}
+	return cnt;
+}
+
+static int get_dns_host(struct aafilter *a, const char *addr, int fam)
+{
+	static int notfirst;
+	int cnt = 0;
+	struct hostent *he;
+
+	a->addr.bitlen = 0;
+	if (!notfirst) {
+		sethostent(1);
+		notfirst = 1;
+	}
+	he = gethostbyname2(addr, fam == AF_UNSPEC ? AF_INET : fam);
+	if (he)
+		cnt = remember_he(a, he);
+	if (fam == AF_UNSPEC) {
+		he = gethostbyname2(addr, AF_INET6);
+		if (he)
+			cnt += remember_he(a, he);
+	}
+	return !cnt;
+}
+
+static int xll_initted;
+
+static void xll_init(void)
+{
+	struct rtnl_handle rth;
+
+	if (rtnl_open(&rth, 0) < 0)
+		exit(1);
+
+	ll_init_map(&rth);
+	rtnl_close(&rth);
+	xll_initted = 1;
+}
+
+static int xll_name_to_index(const char *dev)
+{
+	if (!xll_initted)
+		xll_init();
+	return ll_name_to_index(dev);
+}
+
+void *parse_hostcond(char *addr, bool is_port)
+{
+	char *port = NULL;
+	struct aafilter a = { .port = -1 };
+	struct aafilter *res;
+	int fam = preferred_family;
+	struct filter *f = &current_filter;
+
+	if (fam == AF_UNIX || strncmp(addr, "unix:", 5) == 0) {
+		char *p;
+
+		a.addr.family = AF_UNIX;
+		if (strncmp(addr, "unix:", 5) == 0)
+			addr += 5;
+		p = strdup(addr);
+		a.addr.bitlen = 8*strlen(p);
+		memcpy(a.addr.data, &p, sizeof(p));
+		fam = AF_UNIX;
+		goto out;
+	}
+
+	if (fam == AF_PACKET || strncmp(addr, "link:", 5) == 0) {
+		a.addr.family = AF_PACKET;
+		a.addr.bitlen = 0;
+		if (strncmp(addr, "link:", 5) == 0)
+			addr += 5;
+		port = strchr(addr, ':');
+		if (port) {
+			*port = 0;
+			if (port[1] && strcmp(port+1, "*")) {
+				if (get_integer(&a.port, port+1, 0)) {
+					if ((a.port = xll_name_to_index(port+1)) <= 0)
+						return NULL;
+				}
+			}
+		}
+		if (addr[0] && strcmp(addr, "*")) {
+			unsigned short tmp;
+
+			a.addr.bitlen = 32;
+			if (ll_proto_a2n(&tmp, addr))
+				return NULL;
+			a.addr.data[0] = ntohs(tmp);
+		}
+		fam = AF_PACKET;
+		goto out;
+	}
+
+	if (fam == AF_NETLINK || strncmp(addr, "netlink:", 8) == 0) {
+		a.addr.family = AF_NETLINK;
+		a.addr.bitlen = 0;
+		if (strncmp(addr, "netlink:", 8) == 0)
+			addr += 8;
+		port = strchr(addr, ':');
+		if (port) {
+			*port = 0;
+			if (port[1] && strcmp(port+1, "*")) {
+				if (get_integer(&a.port, port+1, 0)) {
+					if (strcmp(port+1, "kernel") == 0)
+						a.port = 0;
+					else
+						return NULL;
+				}
+			}
+		}
+		if (addr[0] && strcmp(addr, "*")) {
+			a.addr.bitlen = 32;
+			if (nl_proto_a2n(&a.addr.data[0], addr) == -1)
+				return NULL;
+		}
+		fam = AF_NETLINK;
+		goto out;
+	}
+
+	if (fam == AF_INET || !strncmp(addr, "inet:", 5)) {
+		fam = AF_INET;
+		if (!strncmp(addr, "inet:", 5))
+			addr += 5;
+	} else if (fam == AF_INET6 || !strncmp(addr, "inet6:", 6)) {
+		fam = AF_INET6;
+		if (!strncmp(addr, "inet6:", 6))
+			addr += 6;
+	}
+
+	/* URL-like literal [] */
+	if (addr[0] == '[') {
+		addr++;
+		if ((port = strchr(addr, ']')) == NULL)
+			return NULL;
+		*port++ = 0;
+	} else if (addr[0] == '*') {
+		port = addr+1;
+	} else {
+		port = strrchr(strchr(addr, '/') ? : addr, ':');
+	}
+
+	if (is_port)
+		port = addr;
+
+	if (port && *port) {
+		if (*port == ':')
+			*port++ = 0;
+
+		if (*port && *port != '*') {
+			if (get_integer(&a.port, port, 0)) {
+				struct servent *se1 = NULL;
+				struct servent *se2 = NULL;
+
+				if (current_filter.dbs&(1<<TCP_DB))
+					se2 = getservbyname(port, TCP_PROTO);
+				if (se1 && se2 && se1->s_port != se2->s_port) {
+					fprintf(stderr, "Error: ambiguous port \"%s\".\n", port);
+					return NULL;
+				}
+				if (!se1)
+					se1 = se2;
+				if (se1) {
+					a.port = ntohs(se1->s_port);
+				} else {
+					struct scache *s;
+
+					for (s = rlist; s; s = s->next) {
+						if ((s->proto == TCP_PROTO &&
+						     (current_filter.dbs&(1<<TCP_DB)))) {
+							if (s->name && strcmp(s->name, port) == 0) {
+								if (a.port > 0 && a.port != s->port) {
+									fprintf(stderr, "Error: ambiguous port \"%s\".\n", port);
+									return NULL;
+								}
+								a.port = s->port;
+							}
+						}
+					}
+					if (a.port <= 0) {
+						fprintf(stderr, "Error: \"%s\" does not look like a port.\n", port);
+						return NULL;
+					}
+				}
+			}
+		}
+	}
+	if (!is_port && addr && *addr && *addr != '*') {
+		if (get_prefix_1(&a.addr, addr, fam)) {
+			if (get_dns_host(&a, addr, fam)) {
+				fprintf(stderr, "Error: an inet prefix is expected rather than \"%s\".\n", addr);
+				return NULL;
+			}
+		}
+	}
+
+out:
+	if (fam != AF_UNSPEC) {
+		int states = f->states;
+		f->families = 0;
+		filter_af_set(f, fam);
+		filter_states_set(f, states);
+	}
+
+	res = malloc(sizeof(*res));
+	if (res)
+		memcpy(res, &a, sizeof(a));
+	return res;
 }
 
 int main(int argc, char *argv[])
 {
 	int state_filter = 0;
 	resolve_hosts = 0;
+	struct ssfilter * dport_filter;
+	struct ssfilter * sport_filter;
 
 	filter_db_set(&current_filter, TCP_DB);
 	filter_af_set(&current_filter, AF_INET);
 	//filter_af_set(&current_filter, AF_INET6);
 
 	filter_states_set(&current_filter, state_filter);
-	
+    
+	struct aafilter *port_filter = parse_hostcond(argv[1],true);
+	dport_filter = alloc_node(SSF_DCOND,port_filter);
+	sport_filter = alloc_node(SSF_SCOND,port_filter);
+	current_filter.f = alloc_node(SSF_OR,dport_filter);
+        current_filter.f->post = sport_filter;
+
+
         tcp_show(&current_filter, IPPROTO_TCP);
 
 
