@@ -1,0 +1,4 @@
+gcc -Wall -o ssl-server SSL-Server.c -L/usr/lib -lssl -lcrypto
+gcc -Wall -o ssl-client SSL-Client.c -L/usr/lib -lssl -lcrypto
+
+http://www.cs.utah.edu/~swalton/listings/sockets/programs/
