@@ -1,4 +1,7 @@
 gcc -Wall -o ssl-server SSL-Server.c -L/usr/lib -lssl -lcrypto
 gcc -Wall -o ssl-client SSL-Client.c -L/usr/lib -lssl -lcrypto
 
+gcc -o sctpserver /lib64/libsctp.so.1 sctpserver.c
+gcc -o sctpclient /lib64/libsctp.so.1 sctpclient.c
+
 http://www.cs.utah.edu/~swalton/listings/sockets/programs/
