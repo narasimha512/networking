@@ -56,9 +56,16 @@
 #define DTLSC_KEY_CERT "client/dtlsc.key"
 #define DTLSC_CSR "client/dtls.csr"
 
+const int MAX_MULTIHOMING_ADDRESSES = 4;
+
+
 SSL_CTX *dtls_setup_ssl_server (void);
 static int setup_udpserver(int);
-static int setup_sctpserver(int);
+static int setup_sctpserver(char*, char*);
+static int accept_sctp_con(int);
+int get_addr_info(char*, char* , struct sockaddr_in* );
+int parse_addresses(char* input, const int input_len, const int port_number, struct sockaddr_in* addresses, const int max_addr_count, int* count);
+int generate_default_addresses(struct sockaddr_in* bind_addrs, int* count, const int server_port);
 static int init_ssl_connection(SSL *con);
 
 extern int verify_list;
@@ -94,7 +101,7 @@ static void print_stats(BIO *bio, SSL_CTX *ssl_ctx)
 }
 #endif
 
-int dtls_get_data (int s, SSL_CTX *ctx)
+int dtls_get_data (int sfd, SSL_CTX *ctx)
 {
 
 	char *buf = NULL;
@@ -123,7 +130,7 @@ int dtls_get_data (int s, SSL_CTX *ctx)
 	{
 		struct timeval timeout;
 
-		sbio = BIO_new_dgram_sctp (s, BIO_NOCLOSE);
+		sbio = BIO_new_dgram_sctp (sfd, BIO_NOCLOSE);
 
 		timeout.tv_sec = 5;
 		timeout.tv_usec = 0;
@@ -144,6 +151,8 @@ int dtls_get_data (int s, SSL_CTX *ctx)
 
 	SSL_set_bio (con, sbio, sbio);
 	SSL_set_accept_state (con);
+
+	int s = accept_sctp_con(sfd);
 	SSL_set_fd(con,s);
 
 	width = s + 1;
@@ -155,14 +164,17 @@ int dtls_get_data (int s, SSL_CTX *ctx)
 		read_from_terminal = 0;
 		read_from_sslcon = SSL_pending (con);
 
+READ_AGAIN:	
 		if (!read_from_sslcon)
 		{
 			struct timeval tv;
 			FD_ZERO(&readfds);
 			FD_SET(s, &readfds);
-			tv.tv_sec = 1;
+			printf("waiting for data on:%d\n", s);
+			tv.tv_sec = 10;
 			tv.tv_usec = 0;
 			i = select(width, (void *)&readfds, NULL, NULL, &tv);
+			printf("slect return value:%d\n", i);
 			if (i < 0)
 			{
 				continue;
@@ -173,8 +185,9 @@ int dtls_get_data (int s, SSL_CTX *ctx)
 			}
 			else
 			{
-				ret = 2;
-				goto shut;
+				//ret = 2;
+				//goto shut;
+				goto READ_AGAIN;
 			}
 		}
 		if (read_from_sslcon)
@@ -199,6 +212,7 @@ int dtls_get_data (int s, SSL_CTX *ctx)
 			else
 			{
 AGAIN:	
+				printf("Going got SSL_read\n");
 				i = SSL_read (con, (char *) buf, bufsize);
 				switch (SSL_get_error (con, i))
 				{
@@ -213,6 +227,7 @@ AGAIN:
 						else
 							fprintf (stderr, "%s(): Hey, itz all over boss... do finishing "\
 								"ceremony\n", __func__);
+							goto AGAIN;
 						ret = 0;
 						goto ERR;
 					case SSL_ERROR_WANT_WRITE:
@@ -590,19 +605,25 @@ main(int argc, char **argv)
 	SSL_CTX *ctx = NULL;
 	int ret = 0;
 	int c = 0;
-	int server_port = 0;
+	char server_port[10] = {0};
 	extern char *optarg;
-	
+	char server_host[100]={'\0'};
 	int serversock = 0, flags = 0, addr_len;
 
 
-	while ((c = getopt (argc, argv, "p:sch")) != -1)
+	while ((c = getopt (argc, argv, "p:H:sch")) != -1)
 	{
 		switch (c)
 		{
 			case 'p':
+				printf("option p\n");
 				if (optarg)
-					server_port = atoi (optarg);
+					strncpy(server_port,optarg,strlen(optarg));
+				break;
+			case 'H':
+				printf("option H\n");
+				if (optarg)
+					strncpy(server_host,optarg,strlen(optarg));
 				break;
 			case 's':
 				if (dtls_build_server_cert ())
@@ -618,13 +639,11 @@ main(int argc, char **argv)
 				return dtls_print_usage (argv[0]);
 		}
 	}
-
-	if (!server_port)
-		return 0;
+	printf("server host name:%s port:%s\n", server_host, server_port);
 
 	log_fp = (FILE *) stderr;
 	
-	accept_socket = serversock = setup_sctpserver(server_port);
+	accept_socket = serversock = setup_sctpserver(server_port, server_host);
 	if (serversock <= -1 )
 	{
 		fprintf(log_fp, "%s: ERR: %s: The server could not be initalised\n", __FILE__, __func__);
@@ -646,29 +665,14 @@ main(int argc, char **argv)
 
 	addr_len = sizeof (struct sockaddr_in);
 
-	char buff[INET_ADDRSTRLEN];
-struct sockaddr_in  caddr;
-int cfd, len;
-
-   	len=sizeof(caddr);
-do
-{
-cfd=accept(serversock, (struct sockaddr *)&caddr, &len);
-}while(cfd < 0);
-
-
-printf("Connected to %s on fd %d\n",
-inet_ntop(AF_INET, &caddr.sin_addr, buff,
-sizeof(buff)), cfd);	
 	for (;;)
 	{
 //		printf ("loop\n");
-		if ((ret = dtls_get_data (cfd, ctx)) < 0)
+		if ((ret = dtls_get_data (serversock, ctx)) < 0)
 		{
 			close (serversock);
 			return ret;
 		}
-		sleep(60);
 	}
 	
 }
@@ -703,24 +707,37 @@ setup_udpserver(int server_port)
 }
 
 static int
-setup_sctpserver(int server_port)
+setup_sctpserver(char* server_port, char* server_host)
 {
-
+   printf("setup_sctpserver\n");
   int listenSock, connSock, ret, in , flags, i;
-  struct sockaddr_in servaddr;
   struct sctp_initmsg initmsg;
   struct sctp_event_subscribe events;
   struct sctp_sndrcvinfo sndrcvinfo;
+    struct sockaddr_in local_addrs[MAX_MULTIHOMING_ADDRESSES];
+    int local_addr_count = 0;
+
   //char buffer[MAX_BUFFER+1];
 
-  listenSock = socket( AF_INET, SOCK_STREAM, IPPROTO_SCTP );
+  listenSock = socket( AF_INET, SOCK_STREAM , IPPROTO_SCTP );
 
-  bzero( (void *)&servaddr, sizeof(servaddr) );
-  servaddr.sin_family = AF_INET;
-  servaddr.sin_addr.s_addr = htonl( INADDR_ANY );
-  servaddr.sin_port = htons(server_port);
 
-  ret = bind( listenSock, (struct sockaddr *)&servaddr, sizeof(servaddr) );
+	        if(generate_default_addresses(local_addrs, &local_addr_count, atoi(server_port))) {
+	printf("default hosts failed\n");
+	}
+        /*if(parse_addresses(server_host, strlen(server_host), atoi(server_port), local_addrs, MAX_MULTIHOMING_ADDRESSES, &local_addr_count)) {
+	printf("parsing hosts failed\n");
+	}*/
+
+  //ret = get_addr_info(server_port, server_host, &servaddrs[0]);
+
+  //ret = bind( listenSock, servaddr, sizeof(struct sockaddr) );
+  //printf("After bind: %d\n", ret);
+
+  //sleep(60);
+  //ret = get_addr_info(server_port, "10.58.174.208", &servaddrs[1]);
+  ret = sctp_bindx(listenSock, (struct sockaddr*)&local_addrs, local_addr_count, SCTP_BINDX_ADD_ADDR);
+  printf("After bindx: %d\n", ret);
 
   /* Specify that a maximum of 5 streams will be available per socket */
   memset( &initmsg, 0, sizeof(initmsg) );
@@ -734,3 +751,121 @@ setup_sctpserver(int server_port)
   return listenSock;
 
 }
+
+static int
+accept_sctp_con(int serversock)
+{
+#if 1
+	char buff[INET_ADDRSTRLEN];
+struct sockaddr_in  caddr;
+int cfd, len;
+
+   	len=sizeof(caddr);
+do
+{
+cfd=accept(serversock, (struct sockaddr *)&caddr, &len);
+}while(cfd < 0);
+
+
+printf("Connected to %s on fd %d\n",
+inet_ntop(AF_INET, &caddr.sin_addr, buff,
+sizeof(buff)), cfd);	
+
+#endif
+
+return cfd;
+}
+
+int
+get_addr_info(char* port, char* server_ip, struct sockaddr_in* bind_addr)
+{
+        bind_addr->sin_family = AF_INET;
+        bind_addr->sin_port = htons(port);
+        if(inet_pton(AF_INET, server_ip, &(bind_addr->sin_addr)) != 1) {
+            printf("parse_addresses(): Error converting IP address (%s) to sockaddr_in structure\n", server_ip);
+            return 1;
+        }
+
+#if 0
+	printf("ip:%s port:%s\n", server_ip, port);
+           struct addrinfo hints;
+           struct addrinfo *result, *rp;
+           int s, j;
+           ssize_t nread;
+
+           /* Obtain address(es) matching host/port */
+
+           memset(&hints, 0, sizeof(struct addrinfo));
+           hints.ai_family = AF_INET;    /* Allow IPv4 or IPv6 */
+           hints.ai_socktype = SOCK_STREAM; /* Datagram socket */
+           hints.ai_flags = 0;
+           hints.ai_protocol = IPPROTO_SCTP;          /* Any protocol */
+
+           s = getaddrinfo(server_ip, port, &hints, &result);
+           if (s != 0) {
+               fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(s));
+               exit(EXIT_FAILURE);
+           }
+	   printf("getaddrinfo over\n");
+
+           /* getaddrinfo() returns a list of address structures.
+              Try each address until we successfully connect(2).
+              If socket(2) (or connect(2)) fails, we (close the socket
+              and) try the next address. */
+
+           for (rp = result; rp != NULL; rp = rp->ai_next) {
+		printf("returning:%p\n", rp->ai_addr);
+		return rp->ai_addr;
+           }
+	return NULL;
+#endif
+}
+
+int parse_addresses(char* input, const int input_len, const int port_number, struct sockaddr_in* addresses, const int max_addr_count, int* count)
+{
+    if(input[input_len] != '\0') {
+        printf("parse_addresses(): input is not NULL terminated!\n");
+        return 1;
+    }
+
+    char* input_addr[max_addr_count];
+    int input_addr_count = 0;
+
+
+    input_addr[0] = strtok(input, ";");
+
+    for(input_addr_count = 1; input_addr_count < max_addr_count; input_addr_count++) {
+        input_addr[input_addr_count] = strtok(NULL, ";");
+
+        if(input_addr[input_addr_count] == NULL)
+            break;
+    }
+	int i;
+    for(i = 0; i < input_addr_count; i++) {
+        struct sockaddr_in* bind_addr = &addresses[i];
+        memset(bind_addr, 0, sizeof(struct sockaddr_in));
+        bind_addr->sin_family = AF_INET;
+        bind_addr->sin_port = htons(port_number);
+        if(inet_pton(AF_INET, input_addr[i], &(bind_addr->sin_addr)) != 1) {
+            printf("parse_addresses(): Error converting IP address (%s) to sockaddr_in structure\n", input_addr[i]);
+            return 1;
+        }
+    }
+
+    *count = input_addr_count;
+
+    return 0;
+}
+
+int generate_default_addresses(struct sockaddr_in* bind_addrs, int* count, const int server_port)
+{
+    memset(bind_addrs, 0, sizeof(struct sockaddr_in));
+    bind_addrs->sin_family = AF_INET;
+    bind_addrs->sin_port = htons(server_port);
+    bind_addrs->sin_addr.s_addr = INADDR_ANY;
+
+    *count = 1;
+
+    return 0;
+}
+

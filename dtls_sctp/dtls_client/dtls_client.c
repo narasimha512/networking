@@ -37,6 +37,9 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <assert.h>
+#include <netinet/in.h>
+#include <netinet/sctp.h>
+
 
 #import "sslmgr.h"
 
@@ -54,7 +57,7 @@ SSL *ssl;
 BIO *sbio;
 extern int errno;
 static SSL_CTX *dtls_setup_sslclient (void);
-static int dtls_connect (void);
+static int dtls_connect (int);
 extern void dtls_info_callback (const SSL *ssl, int where, int ret);
 static int handle_data(SSL *ssl);
 static int creat_pidfile(void);
@@ -214,7 +217,7 @@ init_daemon()
 	return;
 }
 
-static int dtls_connect (void)
+static int dtls_connect (int cfd)
 {
 	struct timeval timeout;
 	fd_set wfd;
@@ -225,7 +228,8 @@ static int dtls_connect (void)
 	ssl = SSL_new (ctx);
 //	if (DTLS1_VERSION == SSL_version (ssl))
 //		fprintf (stderr, "%s: %s(): Yes: DTLS1_VERSION CLIENT\n", __FILE__, __func__);
-	sbio = BIO_new_dgram_sctp (udpsock, BIO_NOCLOSE);
+	sbio = BIO_new_dgram (cfd, BIO_NOCLOSE);
+	//sbio = BIO_new_dgram_sctp (cfd, BIO_NOCLOSE);
 	if (getsockname (udpsock, &peer, (socklen_t *)&peerlen) < 0)
 	{
 		dtls_report_err ("%s: %s(): getsockname FAILED: %s\n", __FILE__, __func__, strerror (errno));
@@ -239,17 +243,28 @@ static int dtls_connect (void)
 	BIO_ctrl(sbio, BIO_CTRL_DGRAM_MTU_DISCOVER, 0, NULL);
 	SSL_set_bio (ssl, sbio, sbio);
 	SSL_set_connect_state (ssl);
-	SSL_set_fd(ssl,udpsock);	
+	SSL_set_fd(ssl, cfd);	
 //	fprintf (stderr, "%s: %s(): Am now here @ %d\n", __FILE__, __func__, __LINE__);
 	width = SSL_get_fd (ssl) + 1;
 	FD_ZERO (&wfd);
 	FD_SET (SSL_get_fd (ssl), &wfd);
+	/*
 	timeout.tv_sec = 10;
 	timeout.tv_usec = 0;
 	if (select (width, NULL, &wfd, NULL, &timeout) < 0)
 	{
 		return 1;
-	}
+	}*/
+		printf("Before connect\n");
+				if ( SSL_connect(ssl) == -1 )
+				{
+					printf("ssl connect failed\n");
+				}
+				else
+				{
+					printf("ssl connect successfull\n");
+				}
+
 	return 0;
 }	
 
@@ -277,7 +292,7 @@ int main(int argc, char **argv)
 
 	sig_setup();
 
-	udpsock = socket(PF_INET, SOCK_STREAM, IPPROTO_SCTP);
+	udpsock = socket(PF_INET, SOCK_STREAM , IPPROTO_SCTP);
 	if (udpsock == -1)
 	{
 		syslog(LOG_ERR, "%s(): %s @ %d", __func__, strerror (errno), __LINE__);
@@ -293,7 +308,7 @@ int main(int argc, char **argv)
 		syslog(LOG_ERR, "%s(): %s @ %d", __func__, strerror (errno), __LINE__);
 		doexit(EXIT_FAILURE);
 	}
-
+	status = 0;
 	status = connect(udpsock, (struct sockaddr *) &servaddr ,sizeof(struct sockaddr_in));
 	if(status == -1)
 	{
@@ -303,10 +318,23 @@ int main(int argc, char **argv)
 	else
 #endif
 	{
+
+
+
+  /* Specify that a maximum of 5 streams will be available per socket */
+	/*struct sctp_event_subscribe events;
+	struct sctp_initmsg initmsg;
+  memset( &initmsg, 0, sizeof(initmsg) );
+  initmsg.sinit_num_ostreams = 5;
+  initmsg.sinit_max_instreams = 5;
+  initmsg.sinit_max_attempts = 4;
+  ret = setsockopt( status, IPPROTO_SCTP, SCTP_INITMSG,
+                     &initmsg, sizeof(initmsg) );*/
+
 		ctx = dtls_setup_sslclient();
 REDO:
 	//	fprintf (stderr, "%s: %s(): Am here @ %d\n", __FILE__, __func__, __LINE__);
-		ret = dtls_connect ();
+		ret = dtls_connect (udpsock);
 		if (-1 == ret)
 			goto END;
 		else if (1 == ret)
@@ -349,7 +377,8 @@ static int handle_data(SSL *ssl)
 				if (retval == sizeof (sendbuf))
 				{
 					fprintf (stderr, "%s(): Am done with my write\n", __func__);
-					goto WRITEDONE;
+					//goto WRITEDONE;
+					sleep(10);
 				}
 				break;
 			case SSL_ERROR_WANT_READ:
