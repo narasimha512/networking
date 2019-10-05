@@ -14,12 +14,13 @@ int main(int argc, char const *argv[])
     struct sockaddr_in serv_addr;
     char *hello = "Hello from client";
     char buffer[1024] = {0};
+
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
     {
         printf("\n Socket creation error \n");
         return -1;
     }
- 
+    printf("usage ./tcp_client <server-ip> <server-port>\n");
     memset(&serv_addr, '0', sizeof(serv_addr));
 
     if(argc == 4)
@@ -31,7 +32,7 @@ int main(int argc, char const *argv[])
     bind(sock, (struct sockaddr *)&localaddr, sizeof(localaddr));
 
 
-    struct hostent *server;
+    /*struct hostent *server;
 
     server = gethostbyname(argv[1]);
     if (server == NULL) {
@@ -40,13 +41,9 @@ int main(int argc, char const *argv[])
     }
     bcopy((char *)server->h_addr,
          (char *)&serv_addr.sin_addr.s_addr,
-         server->h_length);
+         server->h_length);*/
     }
-    else 
-    {
 	serv_addr.sin_family = AF_INET;
-    }
-    serv_addr.sin_port = htons(atoi(argv[2]));
      
     // Convert IPv4 and IPv6 addresses from text to binary form
     if(inet_pton(AF_INET, argv[1], &serv_addr.sin_addr)<=0) 
@@ -54,14 +51,18 @@ int main(int argc, char const *argv[])
         printf("\nInvalid address/ Address not supported \n");
         return -1;
     }
- 
+    serv_addr.sin_port = htons(atoi(argv[2]));
     if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
     {
         printf("\nConnection Failed \n");
         return -1;
     }
-    send(sock , hello , strlen(hello) , 0 );
-    printf("Hello message sent\n");
+    //while(1)
+    {
+    int bytesCount = send(sock , buffer , 1000 , 0 );
+    printf(" sent bytes \n", bytesCount);
+    sleep(1000);
+    }
     valread = read( sock , buffer, 1024);
     printf("%s\n",buffer );
     return 0;
