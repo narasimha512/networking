@@ -1,6 +1,6 @@
 #include <iostream>
 #include <sstream>
-#include <chrono>
+//#include <chrono>
 #include <openssl/sha.h>
 #include <openssl/md5.h>
 #include <uuid/uuid.h>
@@ -15,6 +15,13 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <sys/poll.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+
+#include <sys/types.h>
+#include <netdb.h>
 
 using namespace std;
 
@@ -32,8 +39,6 @@ void initStaticConfig(const std::string& fileName);
 const std::string getStaticConfig(const std::string& key);
 hrtime_t getCurrentTimeInNanoSec();
 void waitForNextInterval(hrtime_t timeTakenToComplete);
-int readnbytes(int sock_fd,  void* buffer, int bytes);
-int sendnbytes(int sock_fd,  void* buffer, int bytes);
-int pollOnFd(int sock_fd, int poll_time_out, short int events);
+
 
 #endif

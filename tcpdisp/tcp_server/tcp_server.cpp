@@ -1,17 +1,7 @@
 // Server side C/C++ program to demonstrate Socket programming
-#include <stdio.h>
-#include <sys/socket.h>
-#include <stdlib.h>
-#include <netinet/in.h>
-#include <string.h>
+#include "stats.h"
+#include "sock_utils.h"
 
-#include "utils.h"
-
-void closeOnError(int ret, int sock)
-{
-    if(ret < 0)
-    close(sock);
-}
 
 void* receive(void* ptr)
 {
@@ -25,16 +15,24 @@ void* receive(void* ptr)
     int sock_fd = *(static_cast<int*>(ptr));
     int resp_msg_size = atoi(getStaticConfig("resp_msg_size").c_str());
 
+    setSocketOptions(sock_fd);
+
+    //stats
+    uint_32 prev_time = curr_time_in_seconds;
+    reset_stats();
+    int tps=0;
+    hrtime_t previous_time = getCurrentTimeInNanoSec();
+
     while(true)
     {
     unsigned int req_msg_size = 0;
     int valread = readnbytes( sock_fd , &req_msg_size, sizeof(req_msg_size));
         //cout << "read " << valread << " bytes" << endl;
-    closeOnError(valread, sock_fd);
+    threadExitOnError(valread, sock_fd);
     valread = readnbytes( sock_fd , request_buffer, req_msg_size - sizeof(req_msg_size));   
         //cout << "read " << valread << " bytes" << endl;
 
-    closeOnError(valread, sock_fd);
+    threadExitOnError(valread, sock_fd);
 
     hrtime_t request_time = 0;
     memcpy(&request_time, request_buffer , sizeof(hrtime_t) );    
@@ -43,8 +41,24 @@ void* receive(void* ptr)
     hrtime_t current_time = getCurrentTimeInNanoSec();
     memcpy(response_buffer + sizeof(req_msg_size), &request_time, sizeof(hrtime_t) );
     memcpy(response_buffer + sizeof(hrtime_t) + sizeof(req_msg_size), &current_time, sizeof(hrtime_t) );
-    int bytesCount = send(sock_fd , response_buffer ,  resp_msg_size, 0 );
+    int bytesCount = sendnbytes(sock_fd , response_buffer ,  resp_msg_size);
         //cout << "written " << bytesCount << " bytes" << endl;
+    threadExitOnError(bytesCount, sock_fd);
+
+    update_tps(sock_fd, current_time, previous_time, tps);
+
+#if 0        
+    uint_32 resp_time = (current_time - request_time) / 1000000;
+
+    update_stats(resp_time);
+    //cout << "time: " << curr_time_in_seconds << " response time:" << resp_time << " usec" << endl;
+    if(prev_time != curr_time_in_seconds)
+    {
+        print_stats();
+        reset_stats();
+        prev_time = curr_time_in_seconds;
+    }
+#endif 
 
     }
 }
@@ -60,6 +74,8 @@ int main(int argc, char const *argv[])
     char response_buffer[4096] = {0};
     initStaticConfig("server.config");
     int tps_count = atoi(getStaticConfig("tps_count").c_str());
+
+    initSockUtils();
 
     // Creating socket file descriptor
     if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0)

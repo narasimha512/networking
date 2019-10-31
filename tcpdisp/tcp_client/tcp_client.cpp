@@ -1,12 +1,6 @@
 // Client side C/C++ program to demonstrate Socket programming
-#include <stdio.h>
-#include <stdlib.h>
-#include <netinet/in.h>
-#include <string.h>
-#include <sys/types.h>
-#include <netdb.h>
-#include "utils.h"
 #include "stats.h"
+#include "sock_utils.h"
 
 int sock = 0;
 void* receive(void* ptr)
@@ -23,8 +17,12 @@ void* receive(void* ptr)
     {
         //usleep(100000);
     int valread = readnbytes( sock , &req_msg_size, sizeof(req_msg_size));
+        threadExitOnError(valread, sock);
+
     //cout << "read " << valread << " bytes" << endl;
     valread = readnbytes( sock , response_buffer, req_msg_size - sizeof(req_msg_size));
+        threadExitOnError(valread, sock);
+
     //cout << "read " << valread << " bytes" << endl;
     memcpy(&request_time, response_buffer, sizeof(hrtime_t) );
     memcpy(&response_time, response_buffer + sizeof(hrtime_t), sizeof(hrtime_t) );
@@ -60,11 +58,16 @@ int main(int argc, char const *argv[])
     int tps_count = atoi(getStaticConfig("tps_count").c_str());
     int req_msg_size = atoi(getStaticConfig("req_msg_size").c_str());
 
+    initSockUtils();
+
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
     {
         printf("\n Socket creation error \n");
         return -1;
     }
+
+    setSocketOptions(sock);
+
     memset(&serv_addr, '0', sizeof(serv_addr));
 
     if(strcmp(getStaticConfig("src_routing").c_str(), "true"))
@@ -107,8 +110,13 @@ int main(int argc, char const *argv[])
     memcpy(request_buffer, &req_msg_size, sizeof(req_msg_size) );
     hrtime_t current_time = getCurrentTimeInNanoSec();
     memcpy(request_buffer + sizeof(req_msg_size), &current_time, sizeof(hrtime_t) );
-    int bytesCount = send(sock , request_buffer ,  req_msg_size, 0 );
-    
+    int bytesCount = sendnbytes(sock , request_buffer ,  req_msg_size);
+    closeOnError(bytesCount, sock);
+    if(bytesCount < 0)
+    {
+        break;
+    }
+
     if(tps_count <= tps )
     {
         hrtime_t iterationEndTime = getCurrentTimeInNanoSec();

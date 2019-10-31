@@ -11,7 +11,7 @@ CMFLAGS= -std=c++11
 #LIBS=-lssl -lcrypto
 LIBS= -lpthread
 
-CFLAGS= $(CWFLAGS) $(COFLAGS) $(CIFLAGS) $(CMFLAGS)
+CFLAGS= $(CWFLAGS) $(COFLAGS) $(CIFLAGS) $(CMFLAGS) -fPIC
 
 all: tcp_client
 
@@ -21,9 +21,11 @@ utils.o: ../common/utils.h ../common/utils.cpp
 	$(CPP) $(CFLAGS) -c ../common/utils.cpp
 stats.o: ../common/stats.h ../common/stats.cpp
 	$(CPP) $(CFLAGS) -c ../common/stats.cpp
-	
-tcp_client: tcp_client.o utils.o stats.o
-	$(CPP) -o tcp_client tcp_client.o utils.o stats.o $(LIBS)
+sock_utils.o: ../common/sock_utils.h ../common/sock_utils.cpp
+	$(CPP) $(CFLAGS) -c ../common/sock_utils.cpp
+
+tcp_client: tcp_client.o utils.o stats.o sock_utils.o
+	$(CPP) -o tcp_client tcp_client.o utils.o stats.o sock_utils.o $(LIBS)
 	$(RM) *.o
 
 install: compile

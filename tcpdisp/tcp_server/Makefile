@@ -28,10 +28,14 @@ tcp_server.o: tcp_server.cpp
 	$(CPP) $(CFLAGS)  $(CPPFLAGS) -c tcp_server.cpp
 utils.o: ../common/utils.cpp ../common/utils.h
 	$(CPP) $(CFLAGS) $(CPPFLAGS) -c ../common/utils.cpp
+stats.o: ../common/stats.cpp ../common/stats.h
+	$(CPP) $(CFLAGS) $(CPPFLAGS) -c ../common/stats.cpp
+sock_utils.o: ../common/sock_utils.h ../common/sock_utils.cpp
+	$(CPP) $(CFLAGS) -c ../common/sock_utils.cpp
 
-tcp_server: tcp_server.o utils.o
+tcp_server: tcp_server.o utils.o stats.o sock_utils.o 
 	
-	$(CPP) -o tcp_server $(LIBS) tcp_server.o utils.o 
+	$(CPP) -o tcp_server $(LIBS) tcp_server.o utils.o stats.o sock_utils.o
 	
 	#$(STRIP) tcp_server	
 	$(RM) -f *.o
