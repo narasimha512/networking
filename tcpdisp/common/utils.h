@@ -39,6 +39,7 @@ void initStaticConfig(const std::string& fileName);
 const std::string getStaticConfig(const std::string& key);
 hrtime_t getCurrentTimeInNanoSec();
 void waitForNextInterval(hrtime_t timeTakenToComplete);
+void printCompletedTime();
 
 
 #endif

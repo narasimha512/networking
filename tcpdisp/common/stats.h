@@ -1,8 +1,8 @@
 #include "utils.h"
 
 void update_stats(uint_32 resp_time);
-void print_stats();
+bool print_stats();
 void reset_stats();
 
-void update_tps(int sockfd, hrtime_t current_time, hrtime_t& prev_time, int& tps);
+void update_tps(string type, int sockfd, uint_32& last_second, int& tps, size_t size);
 
