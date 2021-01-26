@@ -4,8 +4,7 @@
 #include <stdlib.h>
 #include <netinet/in.h>
 #include <string.h>
-#include <sys/types.h>
-#include <netdb.h>
+#define PORT 8080
  
 int main(int argc, char const *argv[])
 {
@@ -21,35 +20,12 @@ int main(int argc, char const *argv[])
     }
  
     memset(&serv_addr, '0', sizeof(serv_addr));
-
-    if(argc == 4)
-    {
-    struct sockaddr_in localaddr;
-    localaddr.sin_family = AF_INET;
-    localaddr.sin_addr.s_addr = inet_addr(argv[3]);
-    localaddr.sin_port = 0;  // Any local port will do
-    bind(sock, (struct sockaddr *)&localaddr, sizeof(localaddr));
-
-
-    struct hostent *server;
-
-    server = gethostbyname(argv[1]);
-    if (server == NULL) {
-        fprintf(stderr,"ERROR, no such host\n");
-        exit(0);
-    }
-    bcopy((char *)server->h_addr,
-         (char *)&serv_addr.sin_addr.s_addr,
-         server->h_length);
-    }
-    else 
-    {
-	serv_addr.sin_family = AF_INET;
-    }
-    serv_addr.sin_port = htons(atoi(argv[2]));
+ 
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(PORT);
      
     // Convert IPv4 and IPv6 addresses from text to binary form
-    if(inet_pton(AF_INET, argv[1], &serv_addr.sin_addr)<=0) 
+    if(inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr)<=0) 
     {
         printf("\nInvalid address/ Address not supported \n");
         return -1;
